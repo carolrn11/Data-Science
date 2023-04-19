@@ -35,6 +35,5 @@ def recommend_movies(movie_id):
     else:
         average_polarity = 0
 
-    # Retornar a média de polaridade
 
 recommend_movies(76600)

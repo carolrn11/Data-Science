@@ -1,13 +1,8 @@
 import requests
 import pyodbc
 from tqdm import tqdm
+from config import API_KEY, server, database, username, password
 
-API_KEY = '9a678b67bfed6aa1fbc96f93b5c618f5'
-
-server = "LAPTOP-KL74V0IB"
-database = "ONBOARDING"
-username = "sa"
-password = "dson4d"
 
 cnxn = pyodbc.connect(f"DRIVER={{SQL Server}};SERVER={server};DATABASE={database};UID={username};PWD={password}")
 cursor = cnxn.cursor()
@@ -54,34 +49,51 @@ def insert_reviews_for_popular_movies():
 
     for movie_id in tqdm(popular_movie_ids):
         reviews = get_reviews(movie_id)
-        
 
         for review in reviews:
             author_details = extract_author_details(review)
             author = review["author"]
-            content = review["content"]
             created_at = review["created_at"]
             author_name = author_details.get("author_name")
             author_username = author_details.get("author_username")
             author_rating = author_details.get("author_rating")
 
-            # Verificar se já existe um registro com o mesmo ID do filme e nome do autor
-            cursor.execute(f"SELECT * FROM MovieReviews WHERE Author = ? AND MovieID = {movie_id}", (author))
-            result = cursor.fetchone()
+            cursor.execute("SELECT * FROM MovieReviews WHERE Author = ? AND MovieID = ?", (author, movie_id))
+            existing_review = cursor.fetchone()
 
-            if result is None:
-                # Se não houver registro, inserir o comentário na tabela
-                cursor.execute("INSERT INTO MovieReviews (MovieID, Author, Content, CreatedAt, AuthorName, AuthorUsername, AuthorRating) VALUES (?, ?, ?, ?, ?, ?, ?)",
-                               (movie_id, author, content, created_at, author_name, author_username, author_rating))
-            
-            else:
-                # Se houver registro, atualizar as informações do autor
-                cursor.execute(f"UPDATE MovieReviews SET Content=?, CreatedAt=?, AuthorName=?, AuthorUsername=?, AuthorRating=? WHERE Author=? AND MovieID=?",
-                    (content, created_at, author_name, author_username, author_rating, author, movie_id)
-                )
-
+            if existing_review is None:
+                try:
+                    cursor.execute("INSERT INTO MovieReviews (MovieID, Author, CreatedAt, AuthorRating) VALUES (?, ?, ?, ?)",
+                                   (movie_id, author, created_at, author_rating))
+                except pyodbc.IntegrityError as e:
+                    pass
                 
-                cnxn.commit()
+                cursor.execute("SELECT * FROM Authors WHERE AuthorName = ?", (author_name,))
+                existing_author = cursor.fetchone()
+
+                if existing_author is None:
+                    cursor.execute("INSERT INTO Authors (AuthorName, AuthorUsername) VALUES (?, ?)",
+                                   (author_name, author_username))
+                else:
+                    cursor.execute("UPDATE Authors SET AuthorUsername = ? WHERE AuthorName = ?",
+                                   (author_username,  author_name))
+
+            else:
+               
+                cursor.execute("UPDATE MovieReviews SET CreatedAt = ?, AuthorRating = ? WHERE Author = ? AND MovieID = ?",
+                               (created_at, author_rating, author, movie_id))
+                
+                cursor.execute("SELECT * FROM Authors WHERE AuthorName = ?", (author_name,))
+                existing_author = cursor.fetchone()
+
+                if existing_author is None:
+                    cursor.execute("INSERT INTO Authors (AuthorName, AuthorUsername) VALUES (?, ?)",
+                                   (author_name, author_username))
+                else:
+                    cursor.execute("UPDATE Authors SET AuthorUsername = ? WHERE AuthorName = ?",
+                                   (author_username, author_name))
+
+        cnxn.commit()
 
 def get_details(movie_id):
     url = f"https://api.themoviedb.org/3/movie/{movie_id}?api_key={API_KEY}&language=en-US"
@@ -91,28 +103,35 @@ def get_details(movie_id):
 
 def insert_details_for_popular_movies():
     popular_movie_ids = get_popular_movies()
-    
+
     for movie_id in popular_movie_ids:
         details = get_details(movie_id)
+
+        genre_names = [genre["name"] for genre in details.get("genres", [])]
+        genres = ", ".join(genre_names)
+
+        production_companies_names = [production_companies["name"] for production_companies in details.get("production_companies", [])]
+        production_companies = ", ".join(production_companies_names)
+
+        content = details.get('content', None)
 
         movie_data = (
             movie_id,
             details.get('title', '').replace("'", "''"),
-            details.get('overview', '').replace("'", "''"),
             details.get('release_date', None),
             details.get('vote_average', None),
             details.get('vote_count', None),
-            details.get('popularity', None)
+            details.get('popularity', None),
+            details.get('budget', None),
+            details.get('runtime', None),
+            details.get('poster_path', None),
+            genres.replace("'", "''"),
+            production_companies.replace("'", "''")
+            
         )
+        cursor.execute("UPDATE Movies SET content = {content} WHERE id = {movie_id}")
+        cnxn.commit()
 
-        # Verificar se já existe um registro com o mesmo ID do filme e nome do autor
-        cursor.execute(f"SELECT * FROM Movies WHERE id = {movie_id}")
-        result = cursor.fetchone()
-
-        if result is None:
-            # Se não houver registro, inserir o comentário na tabela
-            cursor.execute("INSERT INTO Movies (id, title, overview, releasedate, voteaverage, votecount, popularity) VALUES (?, ?, ?, ?, ?, ?, ?)", movie_data)
-            cnxn.commit()
 
 def update_tables(reviews=True, movies=True):
     if reviews==True:
@@ -123,5 +142,5 @@ def update_tables(reviews=True, movies=True):
         print("Inserindo filmes na tabela...")
         insert_details_for_popular_movies()
 
-update_tables(reviews=True, movies=False)
+update_tables(reviews=False, movies=True)
 
